@@ -1,0 +1,5 @@
+__pycache__
+**/__pycache__
+**/*.hdf5
+*.egg-info
+visual_test/*
