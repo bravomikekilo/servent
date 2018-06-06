@@ -1,0 +1,156 @@
+#! /usr/bin/env python3
+
+import warnings
+
+warnings.filterwarnings('ignore')
+
+import json
+import os
+import io
+import argparse
+import sys
+import glob
+import importlib
+import click
+import yaml
+from collections import namedtuple
+
+import numpy as np
+import h5py as h5
+
+from servent.launch import launch
+from servent.inspect import inspect_file
+
+
+
+config_dir = './config'
+config_extensions = set(['.json', '.yaml'])
+
+class FrontEnd(object):
+
+    def __init__(self, config_dir, config_extensions):
+        super(FrontEnd, self).__init__()
+        self.config_dir = config_dir
+        self.exts = config_extensions
+        self.config_files = [name for name in os.listdir(config_dir) if self.is_one_of_ext(name)]
+        self.config_files.sort()
+        self.config_names = self.get_config_names()
+
+    def is_one_of_ext(self, name):
+        return any((name.endswith(ext) for ext in self.exts))
+
+    def get_config_names(self):
+
+        config_names = dict()
+        for filename in self.config_files:
+            filename = os.path.join(self.config_dir, filename)
+            basename = os.path.basename(filename)
+            name, ext = basename.rsplit('.', maxsplit=1)
+            if name in config_names:
+                if basename in config_names:
+                    raise ValueError("config file with same name {}".format(basename))
+
+                config_names[basename] = (filename, ext)
+                samename, ext = config_names[name]
+                del config_names[name]
+                config_names[os.path.basename(samename)] = (samename, ext)
+
+            else:
+                config_names[name] = (filename, ext)
+        return config_names
+
+
+    def get_config(self, config_name):
+        if config_name in self.config_names:
+            path, ext = self.config_names[config_name]
+            ret = None
+            with open(path, 'r') as f:
+                if ext == 'json':
+                    ret = json.load(f)
+                elif ext == 'yaml':
+                    ret = yaml.load(f)
+                else:
+                    raise ValueError("Unknown file extension")
+            return (ret, path)
+        else:
+            possibles = []
+            for ext in self.exts:
+                possible = config_name + ext
+                if possible in self.config_names:
+                    possibles.append(possible)
+            print("can't find config '{}'".format(config_name))
+            if len(possibles) != 0:
+                print("maybe you mean one of these:")
+            for p in possibles:
+                print(p)
+
+            exit(-1)
+
+def create_frontend():
+    return FrontEnd(config_dir, config_extensions)
+
+
+
+@click.group()
+def launcher():
+    pass
+
+
+@click.command()
+@click.argument('name', required=False)
+def list(name):
+    frontend = create_frontend()
+    config_names = frontend.config_names
+    if name is None:
+        for name in config_names:
+            print(name)
+    else:
+        if name not in config_names:
+            print("error: can't find config '%s'" % (name))
+        with open(config_names[name][0]) as f:
+            print(f.read())
+
+launcher.add_command(list)
+
+
+@click.command()
+@click.argument('name', required=True)
+def run(name):
+    frontend = create_frontend()
+    args, path = frontend.get_config(name)
+
+    # full_path = os.path.join(config_dir, name)
+    # with open(full_path) as f:
+        # args = json.load(f)
+
+    main_name = args['main']
+
+    basename = os.path.basename(path)
+    log_path = os.path.join('./logs', basename + '.log')
+
+
+    main = importlib.import_module(main_name)
+    launch(main, args, log_path)
+
+launcher.add_command(run)
+
+
+
+@click.command()
+@click.argument('filenames', required=True, nargs=-1)
+def inspect(filenames):
+    for filename in filenames:
+        for path in glob.iglob(filename):
+            inspect_file(path)
+            print()
+
+
+
+
+
+launcher.add_command(inspect)
+
+
+if __name__ == '__main__':
+    launcher()
+
